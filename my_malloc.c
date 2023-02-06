@@ -26,11 +26,15 @@
 
 void * ts_malloc_lock(size_t size) {
   pthread_mutex_lock(&lock);
-  void * p = bf_malloc(size);
+  
+  int sbrk_lock = 0;
+
+  void * p = bf_malloc(size, sbrk_lock);
+
+  //void * p = bf_malloc(size);
   pthread_mutex_unlock(&lock);
   return p;
 }
-
 
 void ts_free_lock(void * ptr) {
   pthread_mutex_lock(&lock);
@@ -38,10 +42,23 @@ void ts_free_lock(void * ptr) {
   pthread_mutex_unlock(&lock);
 }
 
-void * reuse_block(size_t size, Metadata * trav) {
+void * ts_malloc_nolock(size_t size) {
+  int sbrk_lock = 1;
+  void * p = bf_malloc(size, sbrk_lock);
+  return p;
+}
+
+void ts_free_nolock(void * ptr) {
+  bf_free(ptr);
+}
+
+void * reuse_block(size_t size, Metadata * trav, int sbrk_lock) {
+//void * reuse_block(size_t size, Metadata * trav) {
 
   if (trav == NULL){
-    return (void*)allocate_new_block(size) + sizeof(Metadata);
+
+    return (void*)allocate_new_block(size, sbrk_lock) + sizeof(Metadata);
+    //return (void*)allocate_new_block(size) + sizeof(Metadata);
   }
   else{
 
@@ -71,12 +88,24 @@ void * reuse_block(size_t size, Metadata * trav) {
   
 }
 
-void * allocate_new_block(size_t size) {
+void * allocate_new_block(size_t size, int sbrk_lock) {
+//void * allocate_new_block(size_t size) {
  
   data_segment += size + sizeof(Metadata);
 
-  Metadata * new_block = sbrk(size + sizeof(Metadata));
-  
+  Metadata * new_block = NULL;
+
+  if (sbrk_lock == 0){
+    new_block = sbrk(size + sizeof(Metadata));
+  }
+  else{
+    
+    pthread_mutex_lock(&lock);
+    new_block = sbrk(size + sizeof(Metadata));
+    pthread_mutex_unlock(&lock);
+
+  }
+
   new_block->size = size;
   
   new_block->prev = NULL;
@@ -193,7 +222,8 @@ void ff_free(void * ptr) {
 
 }
 
-void * bf_malloc(size_t size) {
+void * bf_malloc(size_t size, int sbrk_lock) {
+//void * bf_malloc(size_t size) {
 
 
   // if (head == NULL){
@@ -229,7 +259,8 @@ void * bf_malloc(size_t size) {
 
   }
 
-  return reuse_block(size, theNode);
+  return reuse_block(size, theNode, sbrk_lock);
+  //return reuse_block(size, theNode);
   
 
 }

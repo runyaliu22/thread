@@ -3,180 +3,274 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include "limits.h"
 
-Metadata * first_free_lock = NULL;
-Metadata * last_free_lock = NULL;
-//Metadata * first_block = NULL;
-pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-__thread Metadata * first_free_nolock = NULL;
-__thread Metadata * last_free_nolock = NULL;
 
-/*
-void printFreeList() {
-  Metadata * cur = first_free_block;
-  while (cur != NULL) {
-    printf("cur: %p, cur->size: %lu\n", cur, cur->size);
-    cur = cur->next;
-  }
-  }*/
+
+// void * ff_malloc(size_t size) {
+
+//   // if (head == NULL){
+//   //   return (void*)allocate_new_block(size) + sizeof(Metadata);
+//   // }
+
+//   Metadata* trav = head;
+  
+//   while (trav != NULL && trav->size < size){
+//     trav = trav -> next;
+//   }
+
+//   return reuse_block(size, trav);
+
+// }
+
 
 void * ts_malloc_lock(size_t size) {
   pthread_mutex_lock(&lock);
-  int sbrk_lock = 0;
-  void * p = bf_malloc(size, &first_free_lock, &last_free_lock, sbrk_lock);
+  //int sbrk_lock = 0;
+  //void * p = bf_malloc(size, sbrk_lock);
+
+  void * p = bf_malloc(size);
   pthread_mutex_unlock(&lock);
   return p;
 }
+
+
 void ts_free_lock(void * ptr) {
   pthread_mutex_lock(&lock);
-  bf_free(ptr, &first_free_lock, &last_free_lock);
+  bf_free(ptr);
   pthread_mutex_unlock(&lock);
 }
 
-void * ts_malloc_nolock(size_t size) {
-  int sbrk_lock = 1;
-  void * p = bf_malloc(size, &first_free_nolock, &last_free_nolock, sbrk_lock);
-  return p;
-}
-void ts_free_nolock(void * ptr) {
-  bf_free(ptr, &first_free_nolock, &last_free_nolock);
+// void * ts_malloc_nolock(size_t size) {
+//   int sbrk_lock = 1;
+//   void * p = bf_malloc(size, sbrk_lock);
+//   return p;
+// }
+
+// void ts_free_nolock(void * ptr) {
+//   bf_free(ptr);
+// }
+
+//void * reuse_block(size_t size, Metadata * trav, int sbrk_lock) {
+void * reuse_block(size_t size, Metadata * trav) {
+
+  if (trav == NULL){
+    //return (void*)allocate_new_block(size, sbrk_lock) + sizeof(Metadata);
+    return (void*)allocate_new_block(size) + sizeof(Metadata);
+  }
+  else{
+
+    if (trav->size - size <= sizeof(Metadata)){
+      remove_from_ll(trav);
+    }
+    else{
+      
+      remove_from_ll(trav);//next and previous set to null, but size still unchanged Metadata* p = (void*)trav + sizeof(Metadata) + size;
+      
+      Metadata* p = (void*)trav + sizeof(Metadata) + size;
+      p->next = NULL;
+      p->prev = NULL;
+      p->size = trav->size - size - sizeof(Metadata);
+
+      trav->size = size;//modified after used
+      
+      add_to_ll(p);
+      check_adjacent(p);
+  
+      
+    }
+
+    return (void*)trav + sizeof(Metadata);
+
+  }
+  
 }
 
-void * reuse_block(size_t size,
-                   Metadata * p,
-                   Metadata ** first_free_block,
-                   Metadata ** last_free_block) {
-  if (p->size > size + sizeof(Metadata)) {
-    Metadata * splitted_block;
-    splitted_block = (Metadata *)((char *)p + sizeof(Metadata) + size);
-    splitted_block->size = p->size - size - sizeof(Metadata);
-    splitted_block->isfree = 1;
-    splitted_block->next = NULL;
-    splitted_block->prev = NULL;
+//void * allocate_new_block(size_t size, int sbrk_lock) {
+void * allocate_new_block(size_t size) {
+ 
+  data_segment += size + sizeof(Metadata);
 
-    remove_block(p, first_free_block, last_free_block);
-    add_block(splitted_block, first_free_block, last_free_block);
-    p->size = size;
-  }
-  else {
-    remove_block(p, first_free_block, last_free_block);
-  }
-  p->isfree = 0;
-  p->next = NULL;
-  p->prev = NULL;
-  return (char *)p + sizeof(Metadata);
-}
+  //Metadata * new_block = NULL;
 
-void * allocate_block(size_t size, int sbrk_lock) {
-  Metadata * new_block = NULL;
-  if (sbrk_lock == 0) {
-    new_block = sbrk(size + sizeof(Metadata));
-  }
-  else {
-    pthread_mutex_lock(&lock);
-    new_block = sbrk(size + sizeof(Metadata));
-    pthread_mutex_unlock(&lock);
-  }
+  //if (sbrk_lock == 0){
+  Metadata * new_block = sbrk(size + sizeof(Metadata));
+  //}
+  // else{
+    
+  //   pthread_mutex_lock(&lock);
+  //   Metadata * new_block = sbrk(size + sizeof(Metadata));
+  //   pthread_mutex_unlock(&lock);
+
+  // }
+
   new_block->size = size;
-  new_block->isfree = 0;
+  
   new_block->prev = NULL;
   new_block->next = NULL;
-  return (char *)new_block + sizeof(Metadata);
+
+  return new_block;
+
 }
 
-void add_block(Metadata * p, Metadata ** first_free_block, Metadata ** last_free_block) {
-  if ((*first_free_block == NULL) || (p < *first_free_block)) {
+void add_to_ll(Metadata * p) {
+
+  data_segment_free += p->size + sizeof(Metadata);
+
+  if (head == NULL){
+    head = p;
+    p->next = NULL;
     p->prev = NULL;
-    p->next = *first_free_block;
-    if (p->next != NULL) {
-      p->next->prev = p;
-    }
-    else {
-      *last_free_block = p;
-    }
-    *first_free_block = p;
+    return;
   }
-  else {
-    Metadata * curr = *first_free_block;
-    while ((curr->next != NULL) && (p > curr->next)) {
-      curr = curr->next;  //curr< p< curr->next, keep going
-    }
-    p->prev = curr;
-    p->next = curr->next;
-    curr->next = p;
-    if (p->next != NULL) {
-      p->next->prev = p;
-    }
-    else {
-      *last_free_block = p;
-    }
+
+  if (p < head){
+    p->next = head;
+    head->prev = p;
+    head = p;
+    p->prev = NULL;
+    return;
   }
+
+  Metadata* trav = head;
+
+    while (trav->next != NULL && p > trav->next){
+        trav = trav->next;
+    }
+
+    if (trav->next == NULL){
+
+        trav->next = p;
+        p->prev = trav;
+        p->next = NULL;
+
+    }
+
+    else{
+
+        Metadata* store = trav->next;
+        trav->next = p;
+        p->next = store;
+        p->prev = trav;
+        store->prev = p;
+
+    }
+
 }
 
-void remove_block(Metadata * p,
-                  Metadata ** first_free_block,
-                  Metadata ** last_free_block) {
-  if ((*last_free_block == *first_free_block) && (*last_free_block == p)) {
-    *last_free_block = *first_free_block = NULL;
+void remove_from_ll(Metadata * p) {
+
+  data_segment_free -= p->size + sizeof(Metadata);
+
+  if (p->next == NULL && p->prev == NULL) {
+    head = NULL;
   }
-  else if (*last_free_block == p) {
-    *last_free_block = p->prev;
-    (*last_free_block)->next = NULL;
+  else if (p->next == NULL) {
+    
+    p->prev->next = NULL;
+    p->prev = NULL;
   }
-  else if (*first_free_block == p) {
-    *first_free_block = p->next;
-    (*first_free_block)->prev = NULL;
+  else if (head == p) {
+    head = p->next;
+    head->prev = NULL;
+    p->next = NULL;
   }
   else {
     p->prev->next = p->next;
     p->next->prev = p->prev;
+    p->next = NULL;//set to null before leaving the list
+    p->prev = NULL;
   }
+
+  
+
 }
 
-void bf_free(void * ptr, Metadata ** first_free_block, Metadata ** last_free_block) {
-  Metadata * p;
-  p = (Metadata *)((char *)ptr - sizeof(Metadata));
-  p->isfree = 1;
 
-  add_block(p, first_free_block, last_free_block);
+void check_adjacent(Metadata* curr){
 
-  if ((p->next != NULL) && ((char *)p + p->size + sizeof(Metadata) == (char *)p->next)) {
-    p->size += sizeof(Metadata) + p->next->size;
-    remove_block(p->next, first_free_block, last_free_block);
-    //p->next->next = NULL;
-    //p->next->prev = NULL;
-  }
-  if ((p->prev != NULL) &&
-      ((char *)p->prev + p->prev->size + sizeof(Metadata) == (char *)p)) {
-    p->prev->size += sizeof(Metadata) + p->size;
-    remove_block(p, first_free_block, last_free_block);
-    //p->next = NULL;
-    //p->prev = NULL;
-  }
+    if (curr->next != NULL && (void*) curr + sizeof(Metadata) + curr->size == (void*) curr->next){
+        
+        curr->size += curr->next->size + sizeof(Metadata);
+        data_segment_free += curr->next->size + sizeof(Metadata);//compensate for removal later
+        remove_from_ll(curr->next);
+        //data_segment_free += curr->next->size + sizeof(Metadata);//core dump!
+        
+    }
+
+    if (curr->prev != NULL && (void*) curr->prev + sizeof(Metadata) + curr->prev->size == (void*) curr){
+        
+
+        curr->prev->size += curr->size + sizeof(Metadata);
+        data_segment_free += curr->size + sizeof(Metadata);
+        remove_from_ll(curr);
+        
+
+    }
+
 }
 
-void * bf_malloc(size_t size,
-                 Metadata ** first_free_block,
-                 Metadata ** last_free_block,
-                 int sbrk_lock) {
-  Metadata * p = *first_free_block;
-  Metadata * min_ptr = NULL;
-  while (p != NULL) {
-    if (p->size > size) {
-      if ((min_ptr == NULL) || (p->size < min_ptr->size)) {
-        min_ptr = p;
+void ff_free(void * ptr) {
+
+  Metadata * p = (void*)ptr - sizeof(Metadata);
+
+  add_to_ll(p);
+
+  check_adjacent(p);
+
+}
+
+//void * bf_malloc(size_t size, int sbrk_lock) {
+void * bf_malloc(size_t size) {
+
+
+  // if (head == NULL){
+  //   return (void*)allocate_new_block(size) + sizeof(Metadata);
+  // }
+
+  Metadata* trav = head;
+  Metadata* theNode = NULL;
+  //printf("%zu\n", size);
+
+  while (trav != NULL){
+
+    if (trav->size == size){
+      remove_from_ll(trav);
+      return (void*)trav + sizeof(Metadata);
+      
+    }
+
+    if (trav->size > size ){
+      
+      if (theNode == NULL){
+        theNode = trav;
       }
+      else{
+        if (trav->size < theNode->size){
+          theNode = trav;
+        }
+      }
+
     }
-    if (p->size == size) {
-      min_ptr = p;
-      break;
-    }
-    p = p->next;
+
+    trav = trav->next;
+
   }
-  if (min_ptr != NULL) {
-    return reuse_block(size, min_ptr, first_free_block, last_free_block);
-  }
-  else {
-    return allocate_block(size, sbrk_lock);
-  }
+
+  //return reuse_block(size, theNode, sbrk_lock);
+  return reuse_block(size, theNode);
+  
+
+}
+
+void bf_free(void * ptr) {
+  return ff_free(ptr);
+}
+
+unsigned long get_data_segment_size() {
+  return data_segment;
+}
+
+unsigned long get_data_segment_free_space_size() {
+  return  data_segment_free;
 }
